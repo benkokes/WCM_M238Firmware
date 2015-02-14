@@ -39,10 +39,10 @@
 ** SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ** 
 ** ------------------------------------------------------------------------*/
-
+#include <avr/common.h>
 #include <avr/io.h>
 #include <avr/interrupt.h>
-#include <avr/common.h>
+#include <avr/pgmspace.h>
 #include <util/delay.h>
 #include <stdbool.h> //for TRUE FALSE
 #include <stdlib.h>
@@ -390,8 +390,9 @@ uint16_t writeEEstorage(uint8_t* datacache, uint16_t length)  // this version fo
 {
 	int16_t pageremaining=0, pageoverflow=0, next_buf_size=0;
 	//volatile uint8_t status_reg=0;
-	uint8_t edgemarker[16] = {15,15,15,15,15,15,15,15,15,15,15,15,15,15,15,15};
+	uint8_t edgemarker[20] = {15,15,15,15,15,15,15,15,15,15,15,15,15,15,15,15};  //use 16 length for normal operation
 	//char uart_buf[32];
+	
 	eeprom_wakeup();
 
 	pageremaining = 0x100 -(eeprombyteindex & 0xFF);
@@ -400,33 +401,55 @@ uint16_t writeEEstorage(uint8_t* datacache, uint16_t length)  // this version fo
 	//sprintf(uart_buf, "R:%3u,O:%6d\r\n",pageremaining,pageoverflow);
 	//uart_puts(uart_buf);
 	
-	if((pageoverflow == 0) & (pageremaining == 0x100)) //incoming data fits completely in eeprom page.
+	if((pageoverflow == 0) & (pageremaining == 0x100)) //incoming data fits exactly in eeprom page.
 	{
 		//uart_puts("FullPage\r\n");
+		//uart_puts_p(PSTR("OK:FullPage\r\n"));
 		write_page_eeprom(eeprombyteindex, datacache, 0, 256);		//write data to eeprom
-		eeprombyteindex = (eeprombyteindex+256) & (EEPROM_SIZE-1); 	//update eeprom counter
+		eeprombyteindex = (eeprombyteindex+256) & (EEPROM_SIZE-1); 	//update eeprom counter to the next free space
 		//uart_puts("Complete256PageWritten\r\n");
 		next_buf_size=256;  //space to fill the remaining page on next write.
 	}
-	else if(pageoverflow <= 0) //incoming data fits within page, no overflow
+	else if(pageremaining >=length) //incoming data fits within page, no overflow
 	{
+		//uart_puts_p(PSTR("OK:Page underflow\r\n"));
 		//uart_puts("PartialPage\r\n");
-		write_page_eeprom(eeprombyteindex, datacache,0,length); //length fits, write it.
+		write_page_eeprom(eeprombyteindex, datacache, 0, length); //length fits, write it.
 		eeprombyteindex = (length+eeprombyteindex) & (EEPROM_SIZE-1); //update byte position
-		next_buf_size = 256-length;//return page space remaining
+		if(pageremaining == length)
+			next_buf_size = 256;
+		else
+			next_buf_size = pageremaining-length;//return page space remaining
 		//uart_puts("LessThan256PageWritten\r\n");
 	}
-	else//pages have somehow overflown
+	else if(pageremaining < length) //incoming data overflows remaining page. need to index to next page
+	{
+		//uart_puts_p(PSTR("OK:Page overflow\r\n"));
+		//uart_puts("PartialPage\r\n");
+		write_page_eeprom(eeprombyteindex, datacache, 0, pageremaining-1); //length fits, write it.
+		eeprombyteindex = (pageremaining+eeprombyteindex) & (EEPROM_SIZE-1); //update byte position
+		
+		write_page_eeprom(eeprombyteindex, datacache, 0, length-pageremaining); //length fits, write it.
+		eeprombyteindex = ((length-pageremaining)+eeprombyteindex) & (EEPROM_SIZE-1); //update byte position
+		
+		next_buf_size = 256 - (length - pageremaining);//return page space remaining
+		//uart_puts("LessThan256PageWritten\r\n");
+	}
+	else//pages have somehow overflown, but not met the above conditions. weird 
 	{
 		//error condition, shouldn't be able to get here
-		uart_puts_p("HozedWriteEvent\r\n");//uart_puts("HozedWriteEvent\r\n");
-		
+		PRR &= ~(1<<PRUSART0);//turn on UART module
+		uart_puts_p(PSTR("HozedWriteEvent\r\n"));//uart_puts("HozedWriteEvent\r\n");
+		sprintf((char*)edgemarker,"%d,%d,%d,%d\r\n",length, pageremaining, pageoverflow, next_buf_size );
+		uart_puts((char*)edgemarker);
+		_delay_ms(50);
+		PRR |= (1<<PRUSART0);//turn off UART module
 	}
 
 	if((eeprombyteindex+16) >EEPROM_SIZE)  //insert end-of-data marker in case of power loss.
-	write_page_eeprom(0, edgemarker,0, 16);
+		write_page_eeprom(0, edgemarker,0, 16);
 	else
-	write_page_eeprom(eeprombyteindex, edgemarker,0, 16);
+		write_page_eeprom(eeprombyteindex, edgemarker,0, 16);
 	
 	eeprom_deep_power_down();
 	return next_buf_size;
@@ -516,7 +539,7 @@ uint16_t writeEEstorage(uint8_t* datacache, uint16_t length)  // this version fo
 /*
 *data_buf - Buffer which data will be read into
 skip_dist- offset from most recent measurement event. skip_dist=1 for most recent data
-element_offset - location of individual sensor data within 16 byte frame.
+element_offset - location of individual sensor data within 16 byte frame. Add 1 to the data_cache index location to obtain  correct position
 */
 void retrieve_data(uint8_t *data_buff, uint8_t skip_dist, uint8_t element_offset)
 {
@@ -565,7 +588,7 @@ eeprom_wakeup();
 	valuerange= abs(max_val-min_val);
 	
 	// Below scales the values for graphing.
-	if((element_offset==12)||(element_offset==13)){ //for the 8bit values
+	if((element_offset==13)||(element_offset==14)){ //for the 8bit values
 		if(valuerange==0){
 			scalefactor = 1;
 			for(i=0; i<=120; i++){
@@ -582,6 +605,8 @@ eeprom_wakeup();
 				data_buff[i] = (data_buff[i]-min_val)*scalefactor;
 			}
 		}
+	max_val = max_val -128;  //rescale here to give proper reading to display.
+	min_val = min_val - 128; 	
 	data_buff[124] =0; // set high bit of max_val to zero;
 	data_buff[126] =0; // set high bit of min_val to zero;
 	}else{  //for the 16bit values

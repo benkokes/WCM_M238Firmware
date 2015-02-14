@@ -177,7 +177,7 @@ void clearlcd(void)
 
 void graph_screen(char* scr_title, char* units, uint8_t* databuf)// always assumes 120bytes loaded into databuf
 {
-	uint16_t rownum=1, i=0, charrownum=0;
+	uint16_t rownum=1, i=0;
 	uint16_t currentcharbyteoffset=0;
 	uint8_t lcdrowbuf[20], columnindex=0;
 	
