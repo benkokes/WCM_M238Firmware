@@ -151,7 +151,7 @@ char not_leap(void)      //check for leap year
 }
 */
 
-void elapsed_time(uint32_t seconds, time *tmstruct)
+void elapsed_time_old(uint32_t seconds, time *tmstruct)
 {
 	tmstruct->year = seconds/(SECS_DAY*365);
 	//tmstruct->month  not populated because of variable day-widths of each month.
@@ -162,3 +162,14 @@ void elapsed_time(uint32_t seconds, time *tmstruct)
 	
 	
 }
+
+void elapsed_time(uint32_t seconds, time *tmstruct)
+{
+	tmstruct->year = seconds/(SECS_DAY*365);
+	tmstruct->mday = (seconds -((SECS_DAY*365) * (tmstruct->year)))/SECS_DAY;
+	tmstruct->hour = (seconds -(((SECS_DAY*365) * (tmstruct->year)) + (tmstruct->mday *SECS_DAY)))/3600;
+	//tmstruct->minute = (seconds - (((SECS_DAY*365) * (tmstruct->year)) + (tmstruct->mday *SECS_DAY) + (tmstruct->hour * 3600)))/60;
+	tmstruct->minute = (seconds/60)%60;
+	tmstruct->second = seconds%60;
+	}
+	

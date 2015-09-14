@@ -7,13 +7,16 @@ BMP180:0x77(0xEE)
 
 SPI Devices:
 LCD Sharp LS013B7DH03
-EEPROM Microchip 5AA1024 --131072 byte capacity
+EEPROM Microchip 5AA1024 --131072 byte capacity (1Mbit)
+ -or-
+FLASH Macronix MX25R6435F -- 8388608 byte capacity (64Mbit)
 */
 #ifndef F_CPU
 #define F_CPU 8000000UL
 #endif
 
 #define UART_BAUD_RATE	125000
+#define STACK_CANARY  0xC5 
 
 #include <assert.h>
 #include <stdio.h>
@@ -36,7 +39,7 @@ EEPROM Microchip 5AA1024 --131072 byte capacity
 #include "bmp180.h"
 #include "sht21.h"
 #include "sharplcd.h"
-#include "eeprom.h"
+#include "flash.h"
 #include "time.h"
 #include "DataStructures.h"
 
@@ -45,14 +48,14 @@ time workingtime; //time structure used in SRAM
 time starttime;
 volatile uint32_t globalsecondcount=0; //yay! 136 years worth of seconds...
 volatile uint32_t screentimeout=0;
-volatile uint32_t eeprombyteindex=0, startTimeinSec=0;
+volatile uint32_t extmembyteindex=0, startTimeinSec=0;
 volatile uint16_t intEEpromindex=0;
 uint16_t eetimectr=0;
 extern volatile unsigned char msginbuf;
 volatile uint8_t valid_sw2=1;
 volatile uint8_t valid_sw1=1;
-uint8_t data_cache[257];
-int8_t maxtemp13 =-127, mintemp13 =127;
+uint8_t data_cache[257] = {};
+int8_t maxtemp13 =-120, mintemp13 =120;
 uint32_t maxtemploc13 =0, mintemploc13 =0;
 
 /*Global Flags*/
@@ -64,6 +67,51 @@ volatile uint8_t showscreen=0;
 volatile uint8_t blankscreen=0;
 volatile uint8_t ejectfromwhile=0;
 
+extern uint8_t __bss_end;
+extern uint8_t __stack;
+char scr_buf[26];
+
+__attribute__ ((naked,section (".init1")))
+void StackPaint(void)
+{
+	#if 0
+	uint8_t *p = &_end;
+
+	while(p <= &__stack)
+	{
+		*p = STACK_CANARY;
+		p++;
+	}
+	#else
+	__asm volatile ("    ldi r30,lo8(__bss_end)\n"
+	"    ldi r31,hi8(__bss_end)\n"
+	"    ldi r24,lo8(0xC5)\n" /* STACK_CANARY = 0x55 */
+	"    ldi r25,hi8(__stack)\n"
+	"    rjmp .cmp\n"
+	".loop:\n"
+	"    st Z+,r24\n"
+	".cmp:\n"
+	"    cpi r30,lo8(__stack)\n"
+	"    cpc r31,r25\n"
+	"    brlo .loop\n"
+	"    breq .loop"::);
+	#endif
+}
+
+
+uint16_t StackCount(void)
+{
+	const uint8_t *p = &__bss_end;
+	uint16_t       c = 0;
+
+	while(*p == STACK_CANARY && p <= &__stack)
+	{
+		p++;
+		c++;
+	}
+
+	return c;
+}
 
 void PortInit(void)
 {
@@ -73,7 +121,7 @@ void PortInit(void)
 	DDRB |= (1<<DDB0)|(1<<DDB1)|(1<<DDB2)|(1<<DDB3)|(1<<DDB5); // SCK, MOSI are outputs. SS MUST be configured as Output.
 	PORTB |= (1<<PORTB0)|(1<<PORTB3)|(1<<PORTB4)|(1<<PORTB5);
 	/*
-	oB0:EEPROM_Hold	oB1:LED1(eeprom side)
+	oB0:extmem_Hold	oB1:LED1(extmem side)
 	oB2:LED2(uCside)oB3:MOSI
 	iB4:MISO		oB5:SCK
 	oB6:OSC			oB7:OSC
@@ -100,7 +148,7 @@ void PortInit(void)
 	iD0:UARTRX		oD1:UARTTX
 	iD2:AccelInt    oD3:LCDDisp_EXT
 	oD4:ALS_DVI		iD5:SW1-L
-	oD6:EEPROM_WP	oD7:EEPROM_CS
+	oD6:extmem_WP	oD7:extmem_CS
 	*/
 }
 
@@ -210,28 +258,28 @@ uint16_t retrieve_EEtime_index(void)
 	}
 	return 4; //either the values are all the same, or they increased in value till the end of internalEEprom
 }
-
+/*
 void eetime_dump(void)
 {
-		char sub_buf[22];
+		//char sub_buf[22];
 		uint32_t curtime1=0;
 		uint16_t maxtime_index =0;
 
 		for(maxtime_index=0; maxtime_index<1024; maxtime_index+=4)
 		{
-			uart_puts_p(PSTR("\r\n"));
+			//uart_puts_p(PSTR("\r\n"));
 			curtime1=eeprom_read_dword((uint32_t*)maxtime_index);
-			sprintf(sub_buf,"%4d:%10ld,", maxtime_index,curtime1);
+			//sprintf(sub_buf,"%4d:%10ld,", maxtime_index,curtime1);
 			//sprintf(sub_buf,"%3d,", read_eeprom((eeprombyteindex-i) -1));
-			uart_puts(sub_buf);
+			//uart_puts(sub_buf);
 		}
 
-		uart_puts_p(PSTR("endtimedump\r\n"));
+		//uart_puts_p(PSTR("endtimedump\r\n"));
 } 
-
-void data_buf_dump(uint8_t *data_cache1)  // used immediately after data has been pulled from the EEPROM
+*/
+void data_buf_dump(char* sub_buf, uint8_t *data_cache1)  // used immediately after data has been pulled from the EEPROM
 {
-	char sub_buf[6];
+	//char sub_buf[6];
 	uint16_t i=0;
 	for(i=0; i<512; i++)
 	{
@@ -252,38 +300,38 @@ void clear_buffer(uint8_t *data_cache1)
 	}
 }
 
-void eeprom_dump(void)  //Read contents from external EEPROM and push out UART.
+void flash_dump(char* sub_buf)  //Read contents from external flash and push out UART.
 {
-	char sub_buf[6];
+	//char sub_buf[6];
 	uint32_t i=0;
 	uint8_t tempval;
-	eeprom_wakeup();
+	flash_wakeup();
 	for(i=0; i<512; i++)
 	{
 		if((i%16)==0)
 		uart_puts_p(PSTR("\r\n"));
-		tempval=read_eeprom(i);
+		tempval=read_flash_byte(i);
 		sprintf(sub_buf,"%3d,", tempval);
 		//sprintf(sub_buf,"%3d,", read_eeprom((eeprombyteindex-i) -1));
 		uart_puts(sub_buf);
 	}
 
-	eeprom_deep_power_down();
+	flash_deep_power_down();
 	uart_puts_p(PSTR("\r\n"));
 }
 
 uint32_t find_data_boundary(void)
 {
-	uint32_t ee_addr = 0;
+	uint32_t extmem_addr = 0;
 	uint8_t element_accum=0;
-	uint8_t tempval = 0, ee_val=0;
+	uint8_t tempval = 0, EM_val=0;
 	int8_t tempvals = 0, boundary_found=0;
-	char tempbuf[32];
-	for(ee_addr=0; ee_addr <EEPROM_SIZE; ee_addr++)
+	//char tempbuf[32];
+	for(extmem_addr=0; extmem_addr <EXTMEM_SIZE; extmem_addr++)
 	{
-		ee_val = read_eeprom(ee_addr);
+		EM_val = read_flash_byte(extmem_addr);
 	
-		if(ee_val == 0x0F)
+		if(EM_val == 0xFF)
 			element_accum++;
 		else
 			element_accum=0;
@@ -292,37 +340,38 @@ uint32_t find_data_boundary(void)
 			boundary_found=1;
 			
 		}
-		if((ee_addr % 16) == 13)
-			tempval = ee_val;
+		if((extmem_addr % 16) == 13)
+			tempval = EM_val;
 		
-		if((ee_addr % 16) == 15 && (boundary_found==0))
+		if((extmem_addr % 16) == 15 && (boundary_found==0))
 		{
 			tempvals = ((int8_t)tempval)-128;
 			
 			if(tempvals>maxtemp13){
 				maxtemp13=tempvals;
-				maxtemploc13 = ee_addr;
-					//sprintf(tempbuf,"H%3ld,%3d\r\n", ee_addr,(int8_t)tempvals);
+				maxtemploc13 = extmem_addr;
+					//sprintf(tempbuf,"H%3ld,%3d\r\n", extmem_addr,(int8_t)tempvals);
 					//uart_puts(tempbuf);
 			}
 			if(mintemp13>tempvals){
 				mintemp13=tempvals;
-				mintemploc13 = ee_addr;
-					//sprintf(tempbuf,"L%3ld,%3d\r\n", ee_addr,(int8_t)tempvals);
+				mintemploc13 = extmem_addr;
+					//sprintf(tempbuf,"L%3ld,%3d\r\n", extmem_addr,(int8_t)tempvals);
 					//uart_puts(tempbuf);
 			}
-		//sprintf(tempbuf,"%8ld,u%3d,s%3d\r\n", ee_addr,(uint8_t)tempval,(int8_t)tempvals);
+		//sprintf(tempbuf,"%8ld,u%3d,s%3d\r\n", extmem_addr,(uint8_t)tempval,(int8_t)tempvals);
 		//uart_puts(tempbuf);
 		}
 		if(boundary_found==1){
+			/*
 			sprintf(tempbuf,"H%4d,L%4d\r\n", maxtemp13, mintemp13);
 			uart_puts(tempbuf);
 			sprintf(tempbuf,"Hi%4ld,Li%4ld\r\n", maxtemploc13, mintemploc13);
 			uart_puts(tempbuf);
-
-			return ee_addr;
+			*/
+			return extmem_addr;
 		}
-		if((ee_addr%8192) ==0){
+		if((extmem_addr%8192) ==0){
 			PORTB ^= (1<<PORTB2);
 		}
 	}
@@ -504,12 +553,12 @@ void startup_screen(char *maintxtbuf)
 
 	sprintf_P(maintxtbuf, PSTR("FindingDataBoundry...")); //drawline_str(40, "FindingDataBoundry...");
 	drawline_str(40, maintxtbuf);
-
-	eeprombyteindex = find_data_boundary();//function returns last location of boundary array. 
+spi_highspeed();
+	extmembyteindex = find_data_boundary();//function returns last location of boundary array. 
 	PORTB  &= ~(1<<PORTB2);  //make sure LED is off
-
-	if(eeprombyteindex>0)
-		eeprombyteindex -=15;//Program expects eeprombyteindex to be the next free space, if there is a boundary present, refer to the memory location after the last good data.
+spi_regularspeed();
+	if(extmembyteindex>0)
+		extmembyteindex -=15;//Program expects extmembyteindex to be the next free space, if there is a boundary present, refer to the memory location after the last good data.
 	
 	clearlcd();
 
@@ -528,10 +577,10 @@ void startup_screen(char *maintxtbuf)
 	sprintf(maintxtbuf, "%4d/%2d/%2d-%2d:%2d:%2d  ",workingtime.year + 1900,workingtime.month + 1,workingtime.mday,workingtime.hour,workingtime.minute,workingtime.second); //current time
 	drawline_str(50, maintxtbuf);
 
-	sprintf(maintxtbuf, "ExtEE loc:%6lu     ", eeprombyteindex); //Location of most-current-data marker
+	sprintf(maintxtbuf, "ExtEM loc:%6lu     ", extmembyteindex); //Location of most-current-data marker
 	drawline_str(60, maintxtbuf);
 
-	sprintf(maintxtbuf, "MeasEvtsRemain:%5lu ",(EEPROM_SIZE-eeprombyteindex)/16); //Current external extEEProm fill(if any)
+	sprintf(maintxtbuf, "MeasEvtsRemain:%5lu ",(EXTMEM_SIZE-extmembyteindex)/16); //Current external extextmem fill(if any)
 	drawline_str(70, maintxtbuf);
 /*
 	sprintf(maintxtbuf, "Est extEE loop:%2ld   ",296-(globalsecondcount%296)); //time to next measure
@@ -545,14 +594,19 @@ void startup_screen(char *maintxtbuf)
 
 	while(buttoncheck==0){
 		if(PIND & 0x20){ //left is reset. Start all counters from 0 and show time screen
-			//intEEpromindex = globalsecondcount = eeprombyteindex =0;//TODO: reset time and data counters
+			//intEEpromindex = globalsecondcount = extmembyteindex =0;//TODO: reset time and data counters
 			clearlcd();
 			startTimeinSec = initialsettime(maintxtbuf, &starttime);
 			EEstore_initial_time(startTimeinSec);
 			globalsecondcount=0;
 			intEEpromindex = 4; //reset internal EEprom for time save
-			eeprombyteindex = 0; //reset external EEprom byte index
+			extmembyteindex = 0; //reset external extmem byte index
 			buttoncheck=1;
+			flash_4kSector_erase(1); //clear out first sector for freshie writes.
+			maxtemp13 =-120;
+			mintemp13 =120;
+			maxtemploc13 =0;
+			mintemploc13 =0;
 			_delay_ms(50);
 		}
 		if(PINC & 0x02){//right is continue, use existing timers and data offsets
@@ -562,7 +616,7 @@ void startup_screen(char *maintxtbuf)
 		}
 		_delay_ms(10);
 	}//end while()
-	
+	_delay_ms(200);
 	PCICR |= (1<<PCIE1) | (1<<PCIE2);//reenable PC1INT_vect & PC2INT_vect
 }
 
@@ -595,7 +649,7 @@ void stats_screen(char *mainbuf,  sensordata *recent_measure, time *t )
 	drawline_str(100, mainbuf);
 	sprintf(mainbuf, "RTC Enabled: %d       ",(TIMSK2 & 0x01)); //Clock running?
 	drawline_str(110, mainbuf);
-	sprintf(mainbuf, "eByteIdx:%6lu       ",eeprombyteindex);
+	sprintf(mainbuf, "eByteIdx:%6lu       ",extmembyteindex);
 	drawline_str(120, mainbuf);
 }
 
@@ -607,14 +661,14 @@ void HLscreen(char *maintxtbuf)
 		drawline_str(10, maintxtbuf);
 		sprintf(maintxtbuf, " %3d*c ",maxtemp13); //Max Temp observed since time 0
 		largechardraw_str(20, maintxtbuf);
-		sprintf(maintxtbuf, "Hours Ago:%ld          ",((eeprombyteindex-maxtemploc13)/16)/12); //last maxtemp measure --16 bytes per frame, 1 frame per 5 min, 12 frames per hr.
+		sprintf(maintxtbuf, "Hours Ago:%ld          ",((extmembyteindex-maxtemploc13)/16)/12); //last maxtemp measure --16 bytes per frame, 1 frame per 5 min, 12 frames per hr.
 		drawline_str(42, maintxtbuf);
 
 		sprintf_P(maintxtbuf, PSTR("MinTemp:             "));
 		drawline_str(60, maintxtbuf);
 		sprintf(maintxtbuf, " %3d*c ",mintemp13); //Min temp observed since time 0
 		largechardraw_str(70, maintxtbuf);
-		sprintf(maintxtbuf, "Hours Ago:%ld          ",((eeprombyteindex-mintemploc13)/16)/12); //last mintemp measure
+		sprintf(maintxtbuf, "Hours Ago:%ld          ",((extmembyteindex-mintemploc13)/16)/12); //last mintemp measure
 		drawline_str(92, maintxtbuf);
 		
 		sprintf(maintxtbuf, "Next Meas:%5lusec   ",296-(globalsecondcount%296)); //time to next measure
@@ -626,14 +680,16 @@ void HLscreen(char *maintxtbuf)
 
 int main(void)
 {
+
 	char maintxtbuf[35]; // Screen can only handle 21.3 characters(put back to 24 after debug).
 	//char screen_buf[24];
 		//uint8_t data_cache[515];
+		int16_t i=0;
 
-	uint32_t ExtEE_startaddrR=0,ExtEE_endaddrR=0;
+	uint32_t ExtEM_startaddrR=0,ExtEM_endaddrR=0;
 	sensordata recent_measure;
 	uint16_t DataCacheIndex=0;  //the uC buffer index, never larger than the dynamic_bufl
-	uint16_t EEpagespace_remain=256; //Space remaining in current eeprom page. cant use 512 because not enough uC RAM.
+	uint16_t EMpagespace_remain=256; //Space remaining in current extmem page. cant use 512 because not enough uC RAM.
 	char *header=NULL;
 	
 	cli();
@@ -676,6 +732,10 @@ int main(void)
 	//Enable global interrupts
 	sei();
 	
+//uint8_t edgemarker[20] = {15,15,15,15,15,15,15,15,15,15,15,15,15,15,15,15}; 
+//write_page_flash(0, edgemarker, 0, 16);
+
+
 	//LCD Init
 	lcd_init();
 	//_delay_ms(10);
@@ -683,7 +743,7 @@ int main(void)
 	//Fresh slate!
 	clearlcd();
 	
-	uart_puts_p(PSTR("Startup!\r\n"));
+	//uart_puts_p(PSTR("Startup!\r\n"));
 	_delay_ms(1);
 	
 	//Accelerometer Init
@@ -705,25 +765,55 @@ int main(void)
 	bh1750_init();
 	//uart_puts("Light Sensor Int Complete\r\n");
 	//clearTime_intEEprom();
-	eetime_dump();
+	//eetime_dump();
 	
 	//Startup screen
 	clearlcd();//shutdown screens
 
-	eeprom_wakeup(); //make sure EEprom is ready for action!
+
+	flash_wakeup(); //make sure extmem is ready for action!
+	//sprintf(maintxtbuf, "%x, %x       ", flash_status_register(), flash_config_register()); 
 	
+
+	//flash_4kSector_erase(1);
+/*	for(i=0; i<256; i++)
+	{
+		data_cache[i] = i;
+		
+	}
+	data_cache[0] =0;
+	writeEMstorage(data_cache, 256);
+	
+	for(i =0; i<256; i++)
+	{
+		data_cache[i] = i/3;
+		
+	}
+	writeEMstorage(data_cache, 511);
+
+	while(ExtEM_startaddrR < 1024)
+	{
+		sprintf(maintxtbuf, "%3d,", read_flash_byte(ExtEM_startaddrR));
+		uart_puts(maintxtbuf);
+		ExtEM_startaddrR++;
+	}
+	while(1){}
+*/
+//	drawline_str(14, maintxtbuf);
+//	while(1){}
+		
 	startup_screen(maintxtbuf); //all the startup screen graphics
-	EEpagespace_remain = 256-(eeprombyteindex & 0xFF);
-	//Sleep the EEPROM
-	eeprom_deep_power_down();
+	EMpagespace_remain = 256-(extmembyteindex & 0xFF);
+	//Sleep the extmem
+	flash_deep_power_down();
 
 	//Enable RTC
 	TIMSK2  |= (1<<TOIE2);
 	
 	clearlcd();
 	_delay_ms(50); // allow the UART buffer to flush (debug)
-	drawline_str(64, " Program Running...  ");
-
+	drawline_str(50, "SystemRunning...     ");
+	drawline_str(60, "Screen Load in 5 sec ");
 	PRR = (1<<PRUSART0);//disable power to UART module
 	
 	while(1)
@@ -748,11 +838,11 @@ int main(void)
 			//Keep track of min/max temperature and the time of occurrence
 			if(((int16_t)recent_measure.temperature12SHT)>maxtemp13){
 				maxtemp13=(int16_t)recent_measure.temperature12SHT;
-				maxtemploc13 = eeprombyteindex;
+				maxtemploc13 = extmembyteindex;
 			}
 			if(mintemp13>((int16_t)recent_measure.temperature12SHT)){
 				mintemp13=(int16_t)recent_measure.temperature12SHT;
-				mintemploc13 = eeprombyteindex;
+				mintemploc13 = extmembyteindex;
 			}
 			
 			//http://theboredengineers.com/2012/09/the-quadcopter-get-its-orientation-from-sensors/
@@ -771,20 +861,20 @@ int main(void)
 			
 			DataCacheIndex = DataCacheIndex + 16; //increment data_cache location to next free space
 			
-			if(DataCacheIndex>=EEpagespace_remain)  // Write memory when data_cache full.
+			if(DataCacheIndex>=EMpagespace_remain)  // Write memory when data_cache full.
 				savesensordata=1; //write it all out to sensor data!
 				
 			PRR &= ~(1<<PRUSART0);//turn on UART module
-			sprintf(maintxtbuf,"%ld,%ld,%d, %d, %d, %x, %x\r\n",globalsecondcount, eeprombyteindex, EEpagespace_remain , showscreen, savesensordata, PCICR, TIMSK2);
+			sprintf(maintxtbuf,"%ld,%ld,%d, %d, %d, %x, %x\r\n",globalsecondcount, extmembyteindex, EMpagespace_remain , showscreen, savesensordata, PCICR, TIMSK2);
 			uart_puts(maintxtbuf);
 			_delay_ms(50);
 			PRR |= (1<<PRUSART0);//turn off UART module	
 		}
 		
-		if(savesensordata==1)//Write sensor data to EEprom
+		if(savesensordata==1)//Write sensor data to extmem
 		{
 			if(DataCacheIndex>1){
-				EEpagespace_remain = writeEEstorage(data_cache, DataCacheIndex); //write data to external EEprom, and return remaining space in eeprom page
+				EMpagespace_remain = writeEMstorage(data_cache, DataCacheIndex); //write data to external extmem, and return remaining space in extmem page
 				writeTime_intEEprom(globalsecondcount);						//Write time to INTERNAL EEprom
 				
 				DataCacheIndex=0;
@@ -794,11 +884,14 @@ int main(void)
 
 		if(showscreen==1)  // shows Min/Max temp and time it happened
 		{
-			HLscreen(maintxtbuf);
+			//HLscreen(maintxtbuf);
+			clearlcd();
+			drawline_str(60,"   Placeholder!         ");
+			
 		}
 		else if(showscreen==2)
 		{
-			retrieve_data(data_cache,1,14);  //Temperature
+			retrieveEM_data(data_cache,1,14);  //Temperature
 			clearlcd();
 			sprintf(maintxtbuf, " new   TIME(%3u)  old",data_cache[127]);
 			graph_screen("Temperature-dgC ",maintxtbuf, data_cache);//show graph screen of temperature
@@ -809,7 +902,7 @@ int main(void)
 		}
 		else if(showscreen==3)
 		{
-			retrieve_data(data_cache,1,9);
+			retrieveEM_data(data_cache,1,9);
 
 			clearlcd();
 			sprintf(maintxtbuf, " new   TIME(%3u)  old",data_cache[127]);
@@ -822,7 +915,7 @@ int main(void)
 		
 		else if(showscreen==4)
 		{
-			retrieve_data(data_cache,1,7);
+			retrieveEM_data(data_cache,1,7);
 			clearlcd();
 			sprintf(maintxtbuf, " new   TIME(%3u)  old",data_cache[127]);
 			graph_screen("  Pressure(mPa)  ", maintxtbuf, data_cache);//show graph screen of  Atmospheric pressure
@@ -833,7 +926,7 @@ int main(void)
 		}
 		else if(showscreen==5)
 		{
-			retrieve_data(data_cache,1,11);
+			retrieveEM_data(data_cache,1,11);
 			clearlcd();
 			sprintf(maintxtbuf, " new   TIME(%3u)  old",data_cache[127]);
 			graph_screen("   ALS(lux)      ", maintxtbuf, data_cache);//show graph screen of  Ambient Light
@@ -854,7 +947,7 @@ int main(void)
 			ejectfromwhile=0;
 			PRR &= ~(1<<PRUSART0);//turn on UART module.
 			clearlcd();
-			eetime_dump();
+			//eetime_dump();
 
 			sprintf_P(maintxtbuf, PSTR("To Rx ASCII data:    "));
 			drawline_str(20, maintxtbuf);
@@ -884,34 +977,34 @@ int main(void)
 					{
 				
 					int BufBytesRxd  = uart_gets(maintxtbuf, 18);
-					drawline_str(10, maintxtbuf);
+					//drawline_str(10, maintxtbuf);
 					if(maintxtbuf[0]== '$')
 					{
 						header = strtok(maintxtbuf, ",");
-						ExtEE_startaddrR = atol(strtok(NULL, ","));
-						ExtEE_endaddrR = atol(strtok(NULL, "*"));
+						ExtEM_startaddrR = atol(strtok(NULL, ","));
+						ExtEM_endaddrR = atol(strtok(NULL, "*"));
 						
-						sprintf(maintxtbuf, "%c, S:%ld,St:%ld  %d",header[1], ExtEE_startaddrR,ExtEE_endaddrR, msginbuf);//was screen_buf
-						drawline_str(100, maintxtbuf);
+						//sprintf(maintxtbuf, "%c, S:%ld,St:%ld  %d",header[1], ExtEM_startaddrR,ExtEM_endaddrR, msginbuf);//was screen_buf
+						//drawline_str(100, maintxtbuf);
 						
 						if(header[1] == 'A'){//if(maintxtbuf[1] == 'A'){
-							sprintf(maintxtbuf, "S:%ld,St:%ld\r\n", ExtEE_startaddrR,ExtEE_endaddrR);
+							sprintf(maintxtbuf, "S:%ld,St:%ld\r\n", ExtEM_startaddrR,ExtEM_endaddrR);
 							uart_puts(maintxtbuf);
-							eeprom_wakeup();
-							while(ExtEE_startaddrR < ExtEE_endaddrR)
+							flash_wakeup();
+							while(ExtEM_startaddrR < ExtEM_endaddrR)
 							{
-								sprintf(maintxtbuf, "%3d,", read_eeprom(ExtEE_startaddrR));
+								sprintf(maintxtbuf, "%3d,", read_flash_byte(ExtEM_startaddrR));
 								uart_puts(maintxtbuf);
-								ExtEE_startaddrR++;
+								ExtEM_startaddrR++;
 							}
 							uart_puts_p(PSTR("CompleteRcvdCmd\r\n"));
 						}
 						else if(header[1] == 'B'){
-							eeprom_wakeup();
-							while(ExtEE_startaddrR < ExtEE_endaddrR)
+							flash_wakeup();
+							while(ExtEM_startaddrR < ExtEM_endaddrR)
 							{
-								uart_putc(read_eeprom(ExtEE_startaddrR));
-								ExtEE_startaddrR++;
+								uart_putc(read_flash_byte(ExtEM_startaddrR));
+								ExtEM_startaddrR++;
 							}
 						}
 						else{
@@ -920,15 +1013,15 @@ int main(void)
 							_delay_ms(2000);
 						}
 					}
-					drawline_str(10, maintxtbuf);
+					//drawline_str(10, maintxtbuf);
 					msginbuf--;
-					sprintf(maintxtbuf, "MsgBufCt:%d, %d ", msginbuf, BufBytesRxd); //was screen_buf
-					drawline_str(80, maintxtbuf);
+					//sprintf(maintxtbuf, "MsgBufCt:%d, %d ", msginbuf, BufBytesRxd); //was screen_buf
+					//drawline_str(80, maintxtbuf);
 					
-					ExtEE_startaddrR=0;
-					ExtEE_endaddrR=0;
+					ExtEM_startaddrR=0;
+					ExtEM_endaddrR=0;
 					//header = NULL;
-					eeprom_deep_power_down();
+					flash_deep_power_down();
 				}
 				
 				if(PIND & 0x20){ //left button will allow for time reset of current time count
@@ -967,6 +1060,29 @@ ISR(TIMER2_OVF_vect)
 {
 	globalsecondcount+=8;
 	
+	
+	sprintf_P(scr_buf, PSTR("MaxTemp:             "));
+	drawline_str(1, scr_buf);
+	sprintf(scr_buf, " %3d*c ",maxtemp13); //Max Temp observed since time 0
+	largechardraw_str(11, scr_buf);
+	sprintf(scr_buf, "Hours Ago:%ld          ",((extmembyteindex-maxtemploc13)/16)/12); //last maxtemp measure --16 bytes per frame, 1 frame per 5 min, 12 frames per hr.
+	drawline_str(32, scr_buf);
+
+	sprintf_P(scr_buf, PSTR("MinTemp:             "));
+	drawline_str(50, scr_buf);
+	sprintf(scr_buf, " %3d*c ",mintemp13); //Min temp observed since time 0
+	largechardraw_str(60, scr_buf);
+	sprintf(scr_buf, "Hours Ago:%ld          ",((extmembyteindex-mintemploc13)/16)/12); //last mintemp measure
+	drawline_str(82, scr_buf);
+	
+	
+	gmtime(startTimeinSec+globalsecondcount, &workingtime);
+	sprintf(scr_buf, "%4d/%2d/%2d-%2d:%2d:%2d  ",workingtime.year + 1900,workingtime.month + 1,workingtime.mday,workingtime.hour,workingtime.minute,workingtime.second); //current time
+	drawline_str(100, scr_buf);
+	elapsed_time(globalsecondcount, &workingtime);
+	sprintf(scr_buf, "%4d/mm/%2d-%2d:%2d:%2d  ",workingtime.year,workingtime.mday,workingtime.hour,workingtime.minute,workingtime.second); //current time
+	drawline_str(110, scr_buf);
+	
 	if((globalsecondcount%296)==0) //measure sensors every 5 minutes
 		sensormeasure=1;
 	
@@ -981,7 +1097,7 @@ ISR(TIMER2_OVF_vect)
 	
 	if(screentimeout==globalsecondcount){
 		clearlcd();
-		drawline_str(64, " Program Running...  ");
+//		drawline_str(64, " Program Running...  ");
 		if(showscreen==7){
 			ejectfromwhile=0;
 		}

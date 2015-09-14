@@ -38,3 +38,18 @@ void init_spi(void)
 	SPCR |= (1<<SPE);            //SPI enable
 
 }
+
+void spi_highspeed(void)
+{
+	SPCR &= ~(1<<SPE); 
+	SPCR &= ~(3);//Set Fosc/2 clock rate
+	SPCR |= (1<<SPE); 
+}
+
+
+void spi_regularspeed(void)
+{
+	SPCR &= ~(1<<SPE); 
+	SPCR |= (1<<SPR0); //Set Fosc/8 clock rate
+	SPCR |= (1<<SPE); 
+}
