@@ -215,7 +215,7 @@ void write_enable_flash(void)
 	FLASH_CS_EN; //PORTB &= ~_BV(SLAVESELECT);
 	_delay_us(2);
 	spi_transfer(FL_WREN); //write enable
-	_delay_us(10);
+	_delay_us(12);
 	FLASH_CS_DIS; //PORTB = _BV(SLAVESELECT);
 }
 
@@ -239,10 +239,10 @@ void flash_deep_power_down(void)
 {
 	SPCR &= ~(1<<DORD);//MSB first
 	FLASH_CS_EN; //PORTB &= ~_BV(SLAVESELECT);
-	_delay_us(1);
-	spi_transfer(FL_DPD); //write enable
+	_delay_us(5);
+	spi_transfer(FL_DPD); //Deep Powerdown
 	FLASH_CS_DIS; //PORTB = _BV(SLAVESELECT);
-	_delay_us(10);
+	_delay_us(45);
 }
 
 /* -- Sleep Release -------------------------------------------------------
@@ -255,13 +255,13 @@ void flash_deep_power_down(void)
 ** -----------------------------------------------------------------------*/
 uint8_t flash_wakeup(void)
 {
-	uint8_t data;
+	uint8_t data=0;
 	FLASH_CS_EN; //PORTB &= ~_BV(SLAVESELECT);
 
-	_delay_us(1);  //20nS min required
+	_delay_us(2);  //20nS min required
 
 	FLASH_CS_DIS; //PORTB = _BV(SLAVESELECT);
-	_delay_us(35);
+	_delay_us(45);
 	write_enable_flash();
 	while((flash_status_register() & 0x02) == 0)
 	{}
@@ -437,12 +437,12 @@ uint16_t writeEMstorage(uint8_t* datacache, uint16_t length)  // this version fo
 	else//pages have somehow overflown, but not met the above conditions. weird
 	{
 		//error condition, shouldn't be able to get here
-		PRR &= ~(1<<PRUSART0);//turn on UART module
+		enable_UART0();//turn on UART module
 		//uart_puts_p(PSTR("HozedWriteEvent\r\n"));//uart_puts("HozedWriteEvent\r\n");
 		sprintf((char*)edgemarker,"%d,%d,%d,%d\r\n",length, pageremaining, pageoverflow, next_buf_size );
 		uart_puts((char*)edgemarker);
 		_delay_ms(50);
-		PRR |= (1<<PRUSART0);//turn off UART module
+		disable_UART0();//turn off UART module
 	}
 
 // We can't do the end marker because  we cannot erase just the 16 bytes.

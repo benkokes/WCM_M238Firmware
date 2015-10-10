@@ -42,7 +42,11 @@ void init_spi(void)
 void spi_highspeed(void)
 {
 	SPCR &= ~(1<<SPE); 
-	SPCR &= ~(3);//Set Fosc/2 clock rate
+	
+	SPSR &= ~(1<<SPI2X);//Set Fosc/4 clock rate
+	SPCR &= ~(1<<SPR0);
+	SPCR &= ~(1<<SPR1);
+	
 	SPCR |= (1<<SPE); 
 }
 
@@ -50,6 +54,10 @@ void spi_highspeed(void)
 void spi_regularspeed(void)
 {
 	SPCR &= ~(1<<SPE); 
-	SPCR |= (1<<SPR0); //Set Fosc/8 clock rate
+	
+	SPSR |= (1<<SPI2X);//Set Fosc/8 clock rate
+	SPCR |= (1<<SPR0); 
+	SPCR &= ~(1<<SPR1);
+	
 	SPCR |= (1<<SPE); 
 }

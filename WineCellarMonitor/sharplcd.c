@@ -67,7 +67,7 @@ void largechardraw_str(uint8_t rowaddr, char *textbuf)
 
 			SPCR |= (1<<DORD);//LSB First
 			spi_transfer(rowaddr+fontrownum); //Initial row address(static) + row offset
-			//SPCR &= ~(1<<DORD);//MSB first
+			
 			for(i=0; i<16; i++){
 				spi_transfer(lcdlinebuf[i]); //LCD Data
 			}
@@ -85,6 +85,7 @@ void largechardraw_str(uint8_t rowaddr, char *textbuf)
 	spi_transfer(0x00);
 	_delay_us(3);
 	PORTC &= ~(1<<PORTC3); //LCD CS low.
+	SPCR &= ~(1<<DORD);//MSB first
 }
 
 
@@ -208,7 +209,6 @@ void graph_screen(char* scr_title, char* units, uint8_t* databuf)// always assum
 
 		SPCR |= (1<<DORD);//LSB First
 		spi_transfer(rownum); //Initial row address(static) + row offset
-		//SPCR &= ~(1<<DORD);//MSB first
 		for(i=0; i<16; i++)
 		{
 			spi_transfer(lcdrowbuf[i]); //LCD Data
@@ -224,4 +224,5 @@ void graph_screen(char* scr_title, char* units, uint8_t* databuf)// always assum
 	_delay_us(3);
 	PORTC &= ~(1<<PORTC3); //LCD CS low.
 	drawline_str(102,units); // inserts X-Axis label under graph
+	SPCR &= ~(1<<DORD);//MSB first
 }

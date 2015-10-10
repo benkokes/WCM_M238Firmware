@@ -330,7 +330,7 @@ void uart_init(unsigned int baudrate)
     /* set baud rate */
     UBRR = (unsigned char)baudrate; 
 
-    /* enable UART receiver and transmmitter and receive complete interrupt */
+    /* enable UART receiver and transmitter and receive complete interrupt */
     UART0_CONTROL = _BV(RXCIE)|_BV(RXEN)|_BV(TXEN);
 
 #elif defined (ATMEGA_USART)
@@ -498,6 +498,27 @@ void uart_puts_p(const char *progmem_s )
 
 }/* uart_puts_p */
 
+
+void enable_UART0(void)
+{
+
+	PRR &= ~(1<<PRUSART0);//enable power to UART module
+	/* Enable USART receiver and transmitter and receive complete interrupt */
+	UART0_CONTROL |= (1<<RXCIE0)|(1<<RXEN0)|(1<<TXEN0);
+	
+	asm ("");//Keeps this from being optimized out.
+	
+}
+
+
+void disable_UART0(void)
+{
+	
+	/* Enable USART receiver and transmitter and receive complete interrupt */
+	UART0_CONTROL &= ~((1<<RXCIE0)|(1<<RXEN0)|(1<<TXEN0));
+	PRR |= (1<<PRUSART0);//disable power to UART module
+	asm ("");//Keeps this from being optimized out.
+}
 
 /*
  * these functions are only for ATmegas with two USART
@@ -679,5 +700,6 @@ void uart1_puts_p(const char *progmem_s )
 
 }/* uart1_puts_p */
 
-
 #endif
+
+

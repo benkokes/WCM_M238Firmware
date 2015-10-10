@@ -169,6 +169,8 @@ extern void uart_puts(const char *s );
  */
 extern void uart_puts_p(const char *s );
 
+
+
 /**
  * @brief    Macro to automatically put a string constant into program memory
  */
@@ -186,6 +188,10 @@ extern void uart1_putc(unsigned char data);
 extern void uart1_puts(const char *s );
 /** @brief  Put string from program memory to ringbuffer for transmitting via USART1 (only available on selected ATmega) @see uart_puts_p */
 extern void uart1_puts_p(const char *s );
+/** @brief    Enable UART */
+extern void enable_UART0(void);
+
+void disable_UART0(void);
 /** @brief  Macro to automatically put a string constant into program memory */
 #define uart1_puts_P(__s)       uart1_puts_p(PSTR(__s))
 
@@ -194,5 +200,8 @@ extern void uart1_puts_p(const char *s );
 #define TX_DATA_STR_P(a)   uart_puts_P(a)
 #define TX_DATA_BYTE(a)  uart_putc(a)
 
+
 #endif // UART_H 
+
+
 
